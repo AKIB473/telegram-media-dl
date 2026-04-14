@@ -1,0 +1,14 @@
+.env
+*.session
+*.session-journal
+downloads/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+tmdl.log
+*.log
+.DS_Store
