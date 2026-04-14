@@ -1,4 +1,6 @@
 """Async download queue manager for telegram-media-dl."""
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
@@ -44,7 +46,7 @@ class DownloadJob:
 class DownloadQueue:
     """Manages concurrent download jobs with a semaphore."""
 
-    def __init__(self, max_concurrent: int = 3):
+    def __init__(self, max_concurrent: int = 3) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._jobs: Dict[str, DownloadJob] = {}
         self._user_jobs: Dict[int, List[str]] = {}
@@ -94,15 +96,15 @@ class DownloadQueue:
                 job.status = DownloadStatus.DONE
             except asyncio.CancelledError:
                 job.status = DownloadStatus.CANCELLED
-            except Exception as e:
+            except Exception as exc:
                 job.status = DownloadStatus.FAILED
-                job.error = str(e)
-                logger.error("Job %s failed: %s", job.job_id, e)
+                job.error = str(exc)
+                logger.error("Job %s failed: %s", job.job_id, exc)
             finally:
                 job.finished_at = time.time()
 
     def cancel(self, job_id: str) -> bool:
-        """Cancel a queued or running job."""
+        """Cancel a queued or running job. Returns True if found."""
         job = self._jobs.get(job_id)
         if not job:
             return False
@@ -112,11 +114,13 @@ class DownloadQueue:
         return True
 
     def cancel_user_jobs(self, user_id: int) -> int:
-        """Cancel all jobs for a user. Returns count cancelled."""
+        """Cancel all pending/active jobs for *user_id*. Returns count."""
         count = 0
-        for job_id in self._user_jobs.get(user_id, []):
-            if self.cancel(job_id):
-                count += 1
+        for job_id in list(self._user_jobs.get(user_id, [])):
+            job = self._jobs.get(job_id)
+            if job and job.status in (DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING):
+                if self.cancel(job_id):
+                    count += 1
         return count
 
     def get_job(self, job_id: str) -> Optional[DownloadJob]:
@@ -131,8 +135,14 @@ class DownloadQueue:
 
     def get_active_jobs(self) -> List[DownloadJob]:
         return [
-            j for j in self._jobs.values()
-            if j.status in (DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING, DownloadStatus.UPLOADING)
+            j
+            for j in self._jobs.values()
+            if j.status
+            in (
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                DownloadStatus.UPLOADING,
+            )
         ]
 
     def stats(self) -> Dict[str, Any]:
@@ -140,19 +150,29 @@ class DownloadQueue:
         return {
             "total": len(all_jobs),
             "queued": sum(1 for j in all_jobs if j.status == DownloadStatus.QUEUED),
-            "active": sum(1 for j in all_jobs if j.status == DownloadStatus.DOWNLOADING),
+            "active": sum(
+                1 for j in all_jobs if j.status == DownloadStatus.DOWNLOADING
+            ),
             "done": sum(1 for j in all_jobs if j.status == DownloadStatus.DONE),
             "failed": sum(1 for j in all_jobs if j.status == DownloadStatus.FAILED),
-            "cancelled": sum(1 for j in all_jobs if j.status == DownloadStatus.CANCELLED),
+            "cancelled": sum(
+                1 for j in all_jobs if j.status == DownloadStatus.CANCELLED
+            ),
             "unique_users": len(self._user_jobs),
         }
 
     def cleanup_old_jobs(self, max_age_seconds: int = 3600) -> int:
-        """Remove finished jobs older than max_age_seconds."""
+        """Remove finished jobs older than *max_age_seconds*."""
         now = time.time()
         to_remove = [
-            jid for jid, j in self._jobs.items()
-            if j.status in (DownloadStatus.DONE, DownloadStatus.FAILED, DownloadStatus.CANCELLED)
+            jid
+            for jid, j in self._jobs.items()
+            if j.status
+            in (
+                DownloadStatus.DONE,
+                DownloadStatus.FAILED,
+                DownloadStatus.CANCELLED,
+            )
             and j.finished_at
             and (now - j.finished_at) > max_age_seconds
         ]

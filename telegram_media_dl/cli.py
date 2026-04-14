@@ -1,241 +1,217 @@
-"""CLI for telegram-media-dl — tmdl command."""
+"""tmdl — Telegram Media Downloader CLI."""
+from __future__ import annotations
+
 import asyncio
+import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 import click
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich import print as rprint
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
-console = Console()
+try:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    _rich = True
+except ImportError:
+    console = None  # type: ignore[assignment]
+    _rich = False
 
 
-def _check_env() -> bool:
-    """Check if .env file exists and has required keys."""
-    env_path = Path(".env")
-    if not env_path.exists():
-        return False
-    content = env_path.read_text()
-    required = ["API_ID", "API_HASH", "BOT_TOKEN"]
-    return all(key in content for key in required)
+def _print(msg: str) -> None:
+    if _rich:
+        console.print(msg)
+    else:
+        print(msg)
+
+
+# ──────────────────────────────────────────────────────────────
+# CLI group
+# ──────────────────────────────────────────────────────────────
 
 
 @click.group()
-@click.version_option(package_name="telegram-media-dl")
-def cli():
-    """⚡ tmdl — Telegram Media Downloader Bot CLI"""
-    pass
+def main() -> None:
+    """tmdl — Telegram Media Downloader."""
 
 
-@cli.command()
-@click.option("--log-level", default="INFO", help="Logging level (DEBUG/INFO/WARNING)")
-def run(log_level: str):
+@main.command()
+def run() -> None:
     """Start the Telegram bot."""
-    if not _check_env():
-        console.print(
-            Panel(
-                "❌ [bold red].env file not found or missing required keys.[/]\n\n"
-                "Run [bold cyan]tmdl init[/] to create a template, then fill in your credentials.",
-                title="Configuration Error",
-            )
-        )
-        sys.exit(1)
+    _print("[bold green]Starting bot…[/bold green]" if _rich else "Starting bot…")
+    from telegram_media_dl.bot import main as bot_main
 
-    from .bot import MediaDownloaderBot, setup_logging
-    setup_logging(log_level)
-
-    console.print(Panel(
-        "[bold green]⚡ Starting telegram-media-dl bot...[/]\n"
-        "Press Ctrl+C to stop.",
-        title="telegram-media-dl",
-    ))
-
-    bot = MediaDownloaderBot()
-    bot.run()
+    asyncio.run(bot_main())
 
 
-@cli.command()
-@click.option("--force", is_flag=True, help="Overwrite existing .env file")
-def init(force: bool):
-    """Create a .env configuration file."""
-    env_path = Path(".env")
-    if env_path.exists() and not force:
-        console.print("[yellow]⚠️  .env already exists. Use --force to overwrite.[/]")
-        sys.exit(1)
-
-    example = Path(__file__).parent.parent / ".env.example"
+@main.command("init")
+def cmd_init() -> None:
+    """Create a .env file from .env.example."""
+    example = Path(".env.example")
+    dest = Path(".env")
+    if dest.exists():
+        _print("[yellow].env already exists.[/yellow]" if _rich else ".env already exists.")
+        return
     if example.exists():
-        env_path.write_text(example.read_text())
+        dest.write_text(example.read_text())
+        _print("[green].env created from .env.example[/green]" if _rich else ".env created.")
     else:
-        env_path.write_text(
-            "# Telegram API credentials\n"
-            "# Get from https://my.telegram.org/apps\n"
-            "API_ID=your_api_id_here\n"
-            "API_HASH=your_api_hash_here\n\n"
-            "# Bot token from @BotFather\n"
-            "BOT_TOKEN=your_bot_token_here\n\n"
-            "# Admin user IDs (comma-separated)\n"
-            "ADMIN_IDS=\n\n"
-            "# Download settings\n"
-            "DOWNLOAD_DIR=downloads\n"
-            "MAX_FILE_SIZE_MB=1900\n"
-            "MAX_CONCURRENT_DOWNLOADS=3\n"
-            "DEFAULT_VIDEO_QUALITY=best\n"
-            "DEFAULT_AUDIO_QUALITY=192\n"
-            "DOWNLOAD_TIMEOUT=300\n\n"
-            "# Rate limiting\n"
-            "RATE_LIMIT_COUNT=5\n"
-            "RATE_LIMIT_WINDOW=3600\n\n"
-            "# Features\n"
-            "ALLOW_PLAYLISTS=false\n"
-            "SEND_THUMBNAIL=true\n"
-            "SHOW_VIDEO_INFO=true\n"
-            "MAX_RETRIES=3\n"
-            "SESSION_NAME=tmdl_bot\n"
+        dest.write_text("BOT_TOKEN=your_bot_token_here\n")
+        _print("[green].env created with default template[/green]" if _rich else ".env created.")
+
+
+@main.command("check")
+def cmd_check() -> None:
+    """Verify dependencies and configuration."""
+    ok = True
+    deps = [
+        "aiogram",
+        "yt_dlp",
+        "aiosqlite",
+        "pydantic_settings",
+        "cachetools",
+        "click",
+        "rich",
+    ]
+    _print("\n[bold]Checking dependencies…[/bold]" if _rich else "Checking dependencies…")
+    for dep in deps:
+        found = importlib.util.find_spec(dep) is not None
+        status = "✅" if found else "❌"
+        _print(f"  {status} {dep}")
+        if not found:
+            ok = False
+
+    _print("\n[bold]Checking config…[/bold]" if _rich else "\nChecking config…")
+    try:
+        from telegram_media_dl.config import settings
+
+        token_ok = settings.BOT_TOKEN not in ("", "placeholder", "your_bot_token_here")
+        _print(f"  {'✅' if token_ok else '⚠️'} BOT_TOKEN {'set' if token_ok else 'not set'}")
+        _print(f"  ✅ Download dir: {settings.DOWNLOAD_DIR}")
+        _print(f"  ✅ DB path: {settings.DB_PATH}")
+    except Exception as exc:
+        _print(f"  ❌ Config error: {exc}")
+        ok = False
+
+    if ok:
+        _print("\n[bold green]All checks passed![/bold green]" if _rich else "\nAll checks passed!")
+    else:
+        _print("\n[bold red]Some checks failed.[/bold red]" if _rich else "\nSome checks failed.")
+        sys.exit(1)
+
+
+@main.command("info")
+@click.argument("url")
+def cmd_info(url: str) -> None:
+    """Fetch and display video info for a URL."""
+    _print(f"Fetching info for: {url}")
+    try:
+        from telegram_media_dl.downloader import get_video_info
+        from telegram_media_dl.utils import format_duration, format_size
+
+        info = get_video_info(url)
+        title = info.get("title", "Unknown")
+        uploader = info.get("uploader") or info.get("channel", "Unknown")
+        duration = format_duration(info.get("duration"))
+        size = info.get("filesize") or info.get("filesize_approx")
+        size_str = format_size(size) if size else "Unknown"
+
+        if _rich:
+            table = Table(title=f"📹 {title}")
+            table.add_column("Field")
+            table.add_column("Value")
+            table.add_row("Title", title)
+            table.add_row("Uploader", uploader)
+            table.add_row("Duration", duration)
+            table.add_row("Size", size_str)
+            table.add_row("URL", url)
+            console.print(table)
+        else:
+            print(f"Title:    {title}")
+            print(f"Uploader: {uploader}")
+            print(f"Duration: {duration}")
+            print(f"Size:     {size_str}")
+    except Exception as exc:
+        _print(f"❌ Error: {exc}")
+        sys.exit(1)
+
+
+@main.command("download")
+@click.argument("url")
+@click.option("--quality", default="best", help="Video quality (best/1080p/720p/…)")
+@click.option("--format", "fmt", default="video", help="Format: video or audio")
+@click.option("--output", "-o", default="downloads", help="Output directory")
+def cmd_download(url: str, quality: str, fmt: str, output: str) -> None:
+    """Download a video/audio directly from a URL."""
+
+    async def _run() -> None:
+        from telegram_media_dl.downloader import Downloader
+
+        def on_progress(msg: str) -> None:
+            print(f"\r{msg}", end="", flush=True)
+
+        def on_status(msg: str) -> None:
+            print(f"\n{msg}")
+
+        downloader = Downloader(
+            download_dir=Path(output),
+            on_progress=on_progress,
+            on_status=on_status,
         )
+        filepath, info = await downloader.download(url, fmt, quality, "cli")
+        print(f"\n✅ Saved: {filepath}")
 
-    console.print(f"[green]✅ Created .env at {env_path.absolute()}[/]")
-    console.print("[yellow]Edit the file and fill in your API credentials, then run:[/]")
-    console.print("  [bold cyan]tmdl run[/]")
-
-
-@cli.command()
-@click.argument("url")
-@click.option("--format", "fmt", default="video", type=click.Choice(["video", "audio"]),
-              help="Download format")
-@click.option("--quality", default="best",
-              type=click.Choice(["best", "1080p", "720p", "480p", "360p"]),
-              help="Video quality")
-@click.option("--output", "-o", default=".", help="Output directory")
-def download(url: str, fmt: str, quality: str, output: str):
-    """Download a video/audio URL directly (no bot needed)."""
-
-    async def _do():
-        from .downloader import Downloader, DownloadError
-        out_dir = Path(output)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        progress_msgs = []
-
-        def on_progress(msg):
-            progress_msgs.append(msg)
-
-        def on_status(msg):
-            console.print(f"[cyan]{msg}[/]")
-
-        dl = Downloader(download_dir=out_dir, on_progress=on_progress, on_status=on_status)
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as prog:
-            task = prog.add_task(f"Downloading {url[:60]}...", total=None)
-            try:
-                filepath, info = await dl.download(url, fmt, quality, "cli_download")
-                prog.update(task, description="✅ Done!")
-                console.print(f"\n[green]✅ Saved to:[/] {filepath}")
-                console.print(f"[dim]Title: {info.get('title', 'Unknown')}[/]")
-            except DownloadError as e:
-                prog.update(task, description="❌ Failed")
-                console.print(f"[red]❌ {e}[/]")
-                sys.exit(1)
-
-    asyncio.run(_do())
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        _print(f"❌ Download failed: {exc}")
+        sys.exit(1)
 
 
-@cli.command()
-@click.argument("url")
-def info(url: str):
-    """Show info about a video URL without downloading."""
-
-    async def _do():
-        from .downloader import get_video_info
-        from .utils import build_info_message, format_duration, format_size
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("Fetching info..."),
-            console=console,
-        ) as prog:
-            task = prog.add_task("", total=None)
-            loop = asyncio.get_event_loop()
-            try:
-                data = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: get_video_info(url)),
-                    timeout=30,
-                )
-                prog.update(task, description="✅ Done")
-            except Exception as e:
-                prog.update(task, description="❌ Failed")
-                console.print(f"[red]Error: {e}[/]")
-                sys.exit(1)
-
-        table = Table(title="Video Info", show_header=False, box=None)
-        table.add_column("Key", style="bold cyan", width=15)
-        table.add_column("Value")
-
-        fields = [
-            ("Title", data.get("title", "N/A")),
-            ("Uploader", data.get("uploader") or data.get("channel", "N/A")),
-            ("Duration", format_duration(data.get("duration"))),
-            ("Views", f"{data.get('view_count', 0):,}" if data.get("view_count") else "N/A"),
-            ("Likes", f"{data.get('like_count', 0):,}" if data.get("like_count") else "N/A"),
-            ("Upload Date", data.get("upload_date", "N/A")),
-            ("Ext", data.get("ext", "N/A")),
-        ]
-        size = data.get("filesize") or data.get("filesize_approx")
-        if size:
-            fields.append(("Size (approx)", format_size(size)))
-
-        for k, v in fields:
-            table.add_row(k, str(v))
-
-        console.print(table)
-
-    asyncio.run(_do())
+@main.group("db")
+def cmd_db() -> None:
+    """Database operations."""
 
 
-@cli.command()
-def check():
-    """Check configuration and dependencies."""
-    console.print("[bold]Checking telegram-media-dl setup...[/]\n")
+@cmd_db.command("stats")
+def db_stats() -> None:
+    """Show database statistics."""
 
-    # Check config
-    env_ok = _check_env()
-    console.print(f"{'✅' if env_ok else '❌'} .env file: {'found' if env_ok else 'missing — run tmdl init'}")
+    async def _run() -> None:
+        from telegram_media_dl.database import get_stats, init_db
 
-    # Check dependencies
-    deps = {
-        "telethon": "Telegram client",
-        "yt_dlp": "Download engine",
-        "dotenv": "Config loader",
-        "rich": "CLI output",
-    }
-    for mod, desc in deps.items():
-        try:
-            __import__(mod)
-            console.print(f"✅ {desc} ({mod})")
-        except ImportError:
-            console.print(f"❌ {desc} ({mod}) — [red]not installed[/]")
+        await init_db()
+        stats = await get_stats()
+        if _rich:
+            table = Table(title="📊 Database Stats")
+            table.add_column("Metric")
+            table.add_column("Value")
+            for k, v in stats.items():
+                table.add_row(k.replace("_", " ").title(), str(v))
+            console.print(table)
+        else:
+            for k, v in stats.items():
+                print(f"{k}: {v}")
 
-    # Check ffmpeg
-    import shutil
-    ffmpeg = shutil.which("ffmpeg")
-    console.print(
-        f"{'✅' if ffmpeg else '⚠️ '} ffmpeg: {'found at ' + ffmpeg if ffmpeg else 'not found (audio conversion may fail)'}"
-    )
-
-    console.print("\n[bold]Done.[/]")
+    asyncio.run(_run())
 
 
-def main():
-    cli()
+@cmd_db.command("reset")
+@click.confirmation_option(prompt="This will delete ALL data. Are you sure?")
+def db_reset() -> None:
+    """Clear the entire database."""
+    from telegram_media_dl.config import settings
+
+    db_path = Path(str(settings.DB_PATH))
+    if db_path.exists():
+        db_path.unlink()
+        _print("[red]Database deleted.[/red]" if _rich else "Database deleted.")
+    else:
+        _print("No database file found.")
 
 
 if __name__ == "__main__":

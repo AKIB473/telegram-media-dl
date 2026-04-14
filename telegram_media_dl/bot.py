@@ -1,85 +1,70 @@
-"""Main bot entrypoint for telegram-media-dl."""
+"""Aiogram 3 application entry point for telegram-media-dl."""
+from __future__ import annotations
+
 import asyncio
 import logging
-import signal
-import sys
 
-from telethon import TelegramClient
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
-from .config import config
-from .handlers import BotHandlers
+from .config import settings
+from .database import init_db
+from .handlers import admin, commands, downloads
+from .handlers import settings as settings_handler
+from .middleware import RateLimitMiddleware, UserRegistrationMiddleware
+from .queue_manager import DownloadQueue
 
 logger = logging.getLogger(__name__)
 
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Welcome screen"),
+    BotCommand(command="help", description="Help & feature list"),
+    BotCommand(command="search", description="Search YouTube"),
+    BotCommand(command="history", description="Last 10 downloads"),
+    BotCommand(command="settings", description="Preferences"),
+    BotCommand(command="cancel", description="Cancel active downloads"),
+]
 
-def setup_logging(level: str = "INFO") -> None:
+
+async def on_startup(bot: Bot, queue: DownloadQueue) -> None:
+    await init_db()
+    await bot.set_my_commands(BOT_COMMANDS)
+    logger.info("Bot started — polling…")
+
+
+async def main() -> None:
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler("tmdl.log", encoding="utf-8"),
-        ],
+        level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    # Silence noisy libraries
-    logging.getLogger("telethon").setLevel(logging.WARNING)
-    logging.getLogger("yt_dlp").setLevel(logging.WARNING)
 
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    dp = Dispatcher(storage=MemoryStorage())
+    queue = DownloadQueue(settings.MAX_CONCURRENT)
 
-class MediaDownloaderBot:
-    """The main bot class."""
+    # Middleware (order matters: rate-limit first, then registration)
+    rl_mw = RateLimitMiddleware(
+        max_requests=settings.RATE_LIMIT_COUNT,
+        window_seconds=settings.RATE_LIMIT_WINDOW,
+    )
+    dp.update.middleware(rl_mw)
+    dp.update.middleware(UserRegistrationMiddleware())
 
-    def __init__(self):
-        config.validate()
-        config.ensure_dirs()
-        self.client = TelegramClient(
-            config.SESSION_NAME,
-            config.API_ID,
-            config.API_HASH,
-        )
-        self.handlers: BotHandlers | None = None
+    # Handlers
+    commands.register(dp, queue)
+    downloads.register(dp, queue, bot)
+    admin.register(dp, queue, rl_mw.rate_limiter)
+    settings_handler.register(dp)
 
-    async def start(self) -> None:
-        """Start the bot."""
-        logger.info("Starting telegram-media-dl bot...")
-        await self.client.start(bot_token=config.BOT_TOKEN)
-        me = await self.client.get_me()
-        logger.info("Bot started as @%s (ID: %d)", me.username, me.id)
+    await on_startup(bot, queue)
 
-        self.handlers = BotHandlers(self.client)
-        logger.info(
-            "Bot ready | Max concurrent: %d | Rate limit: %d/hour",
-            config.MAX_CONCURRENT_DOWNLOADS,
-            config.RATE_LIMIT_COUNT,
-        )
-
-        await self.client.run_until_disconnected()
-
-    async def stop(self) -> None:
-        """Gracefully stop the bot."""
-        logger.info("Stopping bot...")
-        if self.client.is_connected():
-            await self.client.disconnect()
-        logger.info("Bot stopped.")
-
-    def run(self) -> None:
-        """Run the bot with graceful shutdown handling."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        def _handle_signal(sig):
-            logger.info("Received signal %s, shutting down...", sig.name)
-            loop.create_task(self.stop())
-
-        if sys.platform != "win32":
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, lambda s=sig: _handle_signal(s))
-
-        try:
-            loop.run_until_complete(self.start())
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user.")
-        finally:
-            loop.run_until_complete(self.stop())
-            loop.close()
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()

@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./tmdl.db:/app/tmdl.db
+      - ./tmdl.log:/app/tmdl.log

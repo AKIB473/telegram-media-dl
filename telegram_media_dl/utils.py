@@ -1,9 +1,11 @@
 """Utility functions for telegram-media-dl."""
-import re
-import os
+from __future__ import annotations
+
 import logging
+import os
+import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,7 @@ def is_valid_url(url: str) -> bool:
 
 
 def is_generic_url(url: str) -> bool:
-    """Check if a string is any valid URL (not just supported sites)."""
+    """Check if a string is any valid HTTP/HTTPS URL."""
     try:
         result = urlparse(url.strip())
         return all([result.scheme in ("http", "https"), result.netloc])
@@ -64,11 +66,11 @@ def is_generic_url(url: str) -> bool:
 
 
 def format_size(bytes_size: int) -> str:
-    """Format bytes to human readable string."""
+    """Format bytes to human-readable string."""
     for unit in ["B", "KB", "MB", "GB"]:
         if bytes_size < 1024:
             return f"{bytes_size:.1f} {unit}"
-        bytes_size /= 1024
+        bytes_size /= 1024  # type: ignore[assignment]
     return f"{bytes_size:.1f} TB"
 
 
@@ -83,6 +85,13 @@ def format_duration(seconds: Optional[int]) -> str:
     if h:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
+
+
+def make_progress_bar(percent: float, width: int = 12) -> str:
+    """Return an ASCII progress bar string."""
+    filled = int(width * percent / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {percent:.0f}%"
 
 
 def sanitize_filename(name: str) -> str:
@@ -105,6 +114,7 @@ def cleanup_file(path: Optional[str]) -> None:
 def cleanup_dir_files(pattern: str) -> None:
     """Delete files matching a glob pattern."""
     from glob import glob
+
     for f in glob(pattern):
         cleanup_file(f)
 
@@ -120,7 +130,7 @@ def get_site_name(url: str) -> str:
 
 
 def build_info_message(info: dict) -> str:
-    """Build a formatted info message from yt-dlp video info dict."""
+    """Build a formatted info message from a yt-dlp video info dict."""
     title = info.get("title", "Unknown")
     uploader = info.get("uploader") or info.get("channel", "Unknown")
     duration = format_duration(info.get("duration"))
