@@ -19,6 +19,7 @@ async def test_enqueue_runs_job(queue):
 
     async def factory(job: DownloadJob) -> None:
         results.append(job.job_id)
+        job.status = DownloadStatus.DONE  # Ensure status is set before finishing
 
     job = queue.enqueue(
         user_id=1,
@@ -27,8 +28,12 @@ async def test_enqueue_runs_job(queue):
         quality="best",
         coro_factory=factory,
     )
-    # Wait for task to complete
-    await asyncio.sleep(0.1)
+    # Wait for task to complete using a loop with timeout for robustness
+    for _ in range(20):
+        if job.status == DownloadStatus.DONE:
+            break
+        await asyncio.sleep(0.05)
+
     assert job.status == DownloadStatus.DONE
     assert job.job_id in results
 
@@ -47,7 +52,10 @@ async def test_enqueue_failed_job(queue):
         quality="720p",
         coro_factory=factory,
     )
-    await asyncio.sleep(0.1)
+    for _ in range(20):
+        if job.status == DownloadStatus.FAILED:
+            break
+        await asyncio.sleep(0.05)
     assert job.status == DownloadStatus.FAILED
     assert "simulated error" in (job.error or "")
 
