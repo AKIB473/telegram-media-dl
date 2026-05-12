@@ -60,7 +60,7 @@ class TestFormatDuration:
         assert format_duration(None) == "Unknown"
 
     def test_zero(self):
-        assert format_duration(0) == "Unknown"
+        assert format_duration(0) == "00:00"
 
     def test_seconds_only(self):
         assert format_duration(45) == "00:45"
