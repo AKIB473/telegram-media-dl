@@ -197,16 +197,27 @@ class Downloader:
 
         def _run() -> Tuple[str, Dict[str, Any]]:
             self._last_progress_time = 0.0
-            opts = self._build_ydl_opts(format_choice, quality, job_id)
 
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+            # Pre-check: fetch metadata only to validate size before downloading
+            check_opts: Dict[str, Any] = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": not settings.ALLOW_PLAYLISTS,
+            }
+            with yt_dlp.YoutubeDL(check_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
                 if not info:
                     raise DownloadError("yt-dlp returned no info")
-
                 check_file_size(info)
 
-                filepath = ydl.prepare_filename(info)
+            # Now download with full options
+            opts = self._build_ydl_opts(format_choice, quality, job_id)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                dl_info = ydl.extract_info(url, download=True)
+                if not dl_info:
+                    raise DownloadError("yt-dlp returned no info after download")
+
+                filepath = ydl.prepare_filename(dl_info)
 
                 # For audio jobs the extension changes after post-processing
                 if format_choice == "audio":
@@ -227,7 +238,7 @@ class Downloader:
                 if not os.path.exists(filepath):
                     raise DownloadError("Downloaded file not found on disk")
 
-                return filepath, info
+                return filepath, dl_info
 
         try:
             filepath, info = await asyncio.wait_for(

@@ -29,9 +29,10 @@ BOT_COMMANDS = [
 ]
 
 
-async def on_startup(bot: Bot, queue: DownloadQueue) -> None:
+async def on_startup(dp: Dispatcher) -> None:
+    """Run on bot startup — initialize DB and set commands."""
     await init_db()
-    await bot.set_my_commands(BOT_COMMANDS)
+    await dp.bot.set_my_commands(BOT_COMMANDS)
     logger.info("Bot started — polling…")
 
 
@@ -62,7 +63,8 @@ async def main() -> None:
     admin.register(dp, queue, rl_mw.rate_limiter)
     settings_handler.register(dp)
 
-    await on_startup(bot, queue)
+    # Run startup logic before polling begins
+    await on_startup(dp)
 
     try:
         await dp.start_polling(bot)

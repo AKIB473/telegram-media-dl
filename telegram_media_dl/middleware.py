@@ -34,23 +34,36 @@ class RateLimitMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         user: User | None = data.get("event_from_user")
-        if user and user.id not in settings.ADMIN_IDS:
-            allowed, reset_in = self.limiter.is_allowed(user.id)
-            if not allowed:
-                # Try to answer if the event is a message or callback
+        if user:
+            # Allow-list check: if ALLOWED_USER_IDS is set, only those users pass
+            if settings.ALLOWED_USER_IDS and user.id not in settings.ALLOWED_USER_IDS:
                 update: Update | None = data.get("update") or (
                     event if isinstance(event, Update) else None
                 )
                 if update and update.message:
                     await update.message.answer(
-                        f"⏳ Rate limit exceeded. Try again in {reset_in}s."
+                        "⛔ You are not authorized to use this bot."
                     )
-                elif update and update.callback_query:
-                    await update.callback_query.answer(
-                        f"⏳ Rate limit exceeded. Try again in {reset_in}s.",
-                        show_alert=True,
+                return
+
+            # Rate-limit check (skip admins)
+            if user.id not in settings.ADMIN_IDS:
+                allowed, reset_in = self.limiter.is_allowed(user.id)
+                if not allowed:
+                    # Try to answer if the event is a message or callback
+                    update: Update | None = data.get("update") or (
+                        event if isinstance(event, Update) else None
                     )
-                return  # drop the event
+                    if update and update.message:
+                        await update.message.answer(
+                            f"⏳ Rate limit exceeded. Try again in {reset_in}s."
+                        )
+                    elif update and update.callback_query:
+                        await update.callback_query.answer(
+                            f"⏳ Rate limit exceeded. Try again in {reset_in}s.",
+                            show_alert=True,
+                        )
+                    return  # drop the event
         return await handler(event, data)
 
     @property

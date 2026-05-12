@@ -76,8 +76,9 @@ def format_size(bytes_size: int) -> str:
 
 def format_duration(seconds: Optional[int]) -> str:
     """Format seconds to HH:MM:SS or MM:SS."""
-    if not seconds:
+    if seconds is None or seconds < 0:
         return "Unknown"
+    seconds = int(seconds)
     seconds = int(seconds)
     h = seconds // 3600
     m = (seconds % 3600) // 60

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -33,6 +34,24 @@ _search_cache: Dict[int, List[dict]] = {}
 
 # Per-user "pending download info" store
 _pending: Dict[int, Dict[str, Any]] = {}
+
+# Per-user timestamp of last activity (for cache expiry)
+_user_last_activity: Dict[int, float] = {}
+
+
+def _cleanup_stale_caches(max_age_seconds: float = 600.0) -> None:
+    """Remove stale entries from per-user caches."""
+    import time as _time
+
+    now = _time.time()
+    stale_users = [
+        uid for uid, ts in _user_last_activity.items()
+        if now - ts > max_age_seconds
+    ]
+    for uid in stale_users:
+        _pending.pop(uid, None)
+        _search_cache.pop(uid, None)
+        _user_last_activity.pop(uid, None)
 
 # Will be injected
 _queue: Optional[DownloadQueue] = None
@@ -72,7 +91,11 @@ async def handle_url(message: Message) -> None:
             await status_msg.edit_text(f"❌ Could not fetch video info: {exc}")
             return
 
+    # Cleanup stale caches before processing
+    _cleanup_stale_caches()
+
     # Store pending info for this user
+    _user_last_activity[message.from_user.id] = time.time()
     _pending[message.from_user.id] = {"url": url, "info": info}
 
     # Show thumbnail + info
@@ -113,6 +136,9 @@ async def handle_quality_callback(callback: CallbackQuery) -> None:
     assert callback.from_user is not None and callback.message is not None
     user_id = callback.from_user.id
     data = callback.data or ""
+
+    _cleanup_stale_caches()
+    _user_last_activity[user_id] = time.time()
 
     await callback.answer()
 

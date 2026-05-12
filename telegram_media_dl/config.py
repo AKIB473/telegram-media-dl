@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Required
     BOT_TOKEN: str = "placeholder"
 
+    # Access control — leave empty to allow all users
+    ALLOWED_USER_IDS: List[int] = []
+
     # Optional
     ADMIN_IDS: List[int] = []
     TARGET_CHAT: Optional[str] = None
